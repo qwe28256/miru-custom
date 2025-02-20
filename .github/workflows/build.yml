@@ -1,0 +1,114 @@
+name: Release CI
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  generate-changelog:
+    needs: [build-and-release-android, build-and-release-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4  # 升级到v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: actions/setup-node@v4  # 升级到v4
+        with:
+          node-version: 20.x  # 升级Node版本
+          cache: 'npm'
+      - run: npx changelogithub
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+  build-and-release-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4  # 统一升级到v4
+        with:
+          ref: main
+      - name: Flutter action
+        uses: subosito/flutter-action@v3  # 升级到v3
+        with:
+          flutter-version: 3.16.8
+          channel: stable
+      - name: Decode keystore
+        run: |
+          echo $ENCODED_KEYSTORE | base64 -di > android/app/keystore.jks
+        env:
+          ENCODED_KEYSTORE: ${{ secrets.KEYSTORE }}
+      
+      - run: flutter pub get
+      - name: Build APK
+        run: flutter build apk --release --split-per-abi -v
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD}}
+      
+      # 使用新版artifact上传方式
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4  # 升级到v4
+        with:
+          path: |
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
+          name: android-${{ github.ref_name }}
+          compression-level: 9
+          overwrite: true
+
+      - name: Release Packages
+        uses: ncipollo/release-action@v2  # 升级到v2
+        with:
+          artifacts: "build/app/outputs/flutter-apk/app-*.apk"
+          allowUpdates: true
+          omitBody: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-and-release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: subosito/flutter-action@v3  # 升级到v3
+        with:
+          flutter-version: 3.16.8
+          channel: stable
+      
+      - name: Install dependencies
+        run: flutter pub get
+      
+      - name: Build Windows
+        run: flutter build windows --release -v
+      
+      - name: Compile Installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /DMyAppVersion="${{github.ref_name}}" .\inno_setup.iss
+      
+      - name: Package Artifacts
+        uses: thedoctor0/zip-release@v2.0.5  # 使用固定版本
+        with:
+          type: 'zip'
+          filename: 'Miru-${{github.ref_name}}-windows.zip'
+          directory: 'build/windows/x64/runner/Release'
+          overwrite: true
+      
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4  # 升级到v4
+        with:
+          path: |
+            Output/*.exe
+            Miru-${{github.ref_name}}-windows.zip
+          name: windows-${{ github.ref_name }}
+          retention-days: 5
+      
+      - name: Release Packages
+        uses: ncipollo/release-action@v2  # 升级到v2
+        with:
+          artifacts: 'Output/*.exe, Miru-${{github.ref_name}}-windows.zip'
+          allowUpdates: true
+          omitBody: true
+          token: ${{ secrets.GITHUB_TOKEN }}
